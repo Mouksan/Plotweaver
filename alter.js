@@ -80,10 +80,16 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
     const parts = [];
 
     parts.push(
-        'You are helping generate a STARTING POINT for a brand-new roleplay character — '
-        + 'not a finished character sheet, not prose, not a finished bio. The author will '
-        + 'mix and match pieces afterward (a name from one option, a personality block from '
-        + 'another) — so give independent, varied options, not five complete matching characters.',
+        'You are helping generate a STARTING POINT for the USER PERSONA — the character '
+        + 'the human author will personally roleplay as ({{user}}), opposite the character '
+        + 'card provided below. This is NOT a new side character, NOT an NPC, and NOT '
+        + 'someone from the bot\'s own story — it is the author\'s own player character. '
+        + 'The character card and first message below are CONTEXT ONLY: they tell you what '
+        + 'world and what person this persona will be interacting with. Do not retell, '
+        + 'summarize, or borrow from the bot\'s own backstory.\n\n'
+        + 'This is not a finished character sheet, not prose, not a finished bio. The author '
+        + 'will mix and match pieces afterward (a name from one option, a personality block '
+        + 'from another) — so give independent, varied options, not five complete matching characters.',
     );
     parts.push('Write everything in English.');
     parts.push(
@@ -98,7 +104,7 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
     const briefLines = [];
     if (gender) briefLines.push(`- Gender/pronouns: ${gender}`);
     if (species) briefLines.push(`- Race/species (take this into account for background and, if relevant, scent): ${species}`);
-    if (connection) briefLines.push(`- Connection to this bot/story — this MUST be reflected in the background options: ${connection}`);
+    if (connection) briefLines.push(`- Connection to this bot/story — reflect this in the single relationship bullet allowed per background variation: ${connection}`);
     if (briefLines.length) {
         parts.push(`# AUTHOR'S BRIEF (MANDATORY)\n${briefLines.join('\n')}`);
     }
@@ -134,8 +140,13 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         + '5 variations. Each is 5-6 single-word traits, comma-separated '
         + '(e.g. "cheerful, clingy, melancholic, blunt, loyal"). One per line, numbered 1-5.\n\n'
         + '## BACKGROUND\n'
-        + '5 variations. Each is 4-5 short bullet points — who they are, where they\'re from, '
-        + 'and their connection to this bot/story. Concrete and factual, not a memoir. '
+        + '5 variations. Each is 4-5 short bullet points of TRIVIA ABOUT THIS PERSONA '
+        + 'THEMSELVES — concrete facts that make them a specific person: occupation, origin, '
+        + 'skills, habits, quirks, fears, tastes, physical details, small personal history. '
+        + 'At most ONE bullet per variation may mention how they know or relate to the bot; '
+        + 'the rest must be about the persona alone. Do NOT retell the bot\'s backstory, do '
+        + 'NOT summarize the events of the first message, and do NOT describe what the bot '
+        + 'does or wants — those are already known. Concrete and factual, not a memoir. '
         + 'One numbered block (1-5) per variation.',
     );
 
