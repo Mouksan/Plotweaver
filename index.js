@@ -19,10 +19,11 @@ function mountSettingsEntry() {
         <div class="plotweaver-settings">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b><i class="fa-solid fa-feather-pointed"></i> Plotweaver</b>
+                    <b><i class="fa-solid fa-feather-pointed"></i> 「 PLOTWEAVER 」</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
+                    <div class="pw-panel-btns">
                     <button id="plotweaver_open_btn" class="menu_button pw-panel-btn">
                         <i class="fa-solid fa-feather-pointed"></i>
                         <span>Открыть Plotweaver</span>
@@ -35,6 +36,7 @@ function mountSettingsEntry() {
                         <i class="fa-solid fa-user-pen"></i>
                         <span>Открыть Alter</span>
                     </button>
+                    </div>
                 </div>
             </div>
         </div>

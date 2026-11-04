@@ -804,6 +804,9 @@ const MD_TOOLBAR_HTML = `
     </div>
 `;
 
+// Место прокрутки в Скетчбуке сохраняется, когда ты перестала скроллить.
+const SCROLL_SAVE_DELAY = 1000;
+
 function notebookViewerHtml(pagesStore, previewMode) {
     const page = pagesStore.pages.find((p) => p.id === pagesStore.activePageId);
     if (!page) return '<p class="pw-hint">Выбери страницу слева — или создай новую.</p>';
@@ -867,13 +870,74 @@ export async function openNotebook() {
     root.classList.add('pw-dialog', 'pw-notebook-dialog');
 
     // Состояние экрана, которое не хранится между открытиями окна — только
-    // пока оно открыто сейчас.
+    // пока оно открыто сейчас. Режим просмотра/правки и место прокрутки
+    // хранятся у самой страницы (viewMode, scrollPos) — см. ниже.
     let mode = 'plot'; // 'plot' | 'persona'
     let previewMode = false;
     const activeTagFilters = new Set();
     let filterPanelOpen = false;
 
+    // --- Место прокрутки: у каждой страницы своё, отдельно для просмотра и правки.
+    // Храним долю (0..1), а не пиксели — так место совпадает на телефоне и на компе.
+    let scrollTimer = null;
+    let pendingScroll = null; // { pageId, key, ratio }
+    let restoring = false;
+
+    const scrollKey = () => (previewMode ? 'preview' : 'edit');
+    const scrollElement = () => root.querySelector(previewMode ? '.pw-notebook-preview' : '.pw-notebook-text');
+
+    const flushScroll = () => {
+        clearTimeout(scrollTimer);
+        scrollTimer = null;
+        if (!pendingScroll) return;
+        const { pageId, key, ratio } = pendingScroll;
+        pendingScroll = null;
+        const page = getPagesStore().pages.find((p) => p.id === pageId);
+        if (!page) return;
+        const saved = page.scrollPos && typeof page.scrollPos === 'object' ? page.scrollPos : {};
+        if (Math.abs((saved[key] ?? -1) - ratio) < 0.005) return;
+        updatePage(pageId, { scrollPos: { ...saved, [key]: ratio } });
+    };
+
+    // scroll не всплывает — ловим в фазе перехвата на корне окна.
+    root.addEventListener('scroll', (event) => {
+        if (restoring) return;
+        const el = event.target;
+        if (!(el instanceof Element) || !el.matches('.pw-notebook-preview, .pw-notebook-text')) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max <= 0) return;
+        pendingScroll = {
+            pageId: getPagesStore().activePageId,
+            key: scrollKey(),
+            ratio: Math.min(1, Math.max(0, el.scrollTop / max)),
+        };
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(flushScroll, SCROLL_SAVE_DELAY);
+    }, true);
+
+    // Окно может ещё не стоять в документе (первый рендер до popup.show) —
+    // ждём, пока у текста появится высота.
+    const restoreScroll = (page) => {
+        const ratio = page?.scrollPos?.[scrollKey()];
+        if (!(ratio > 0)) return;
+        let tries = 0;
+        const step = () => {
+            const el = scrollElement();
+            if (!el) return;
+            const max = el.scrollHeight - el.clientHeight;
+            if (!el.isConnected || max <= 0) {
+                if (++tries < 40) requestAnimationFrame(step);
+                return;
+            }
+            restoring = true;
+            el.scrollTop = ratio * max;
+            requestAnimationFrame(() => { restoring = false; });
+        };
+        requestAnimationFrame(step);
+    };
+
     const render = () => {
+        flushScroll();
         const pagesStore = getPagesStore();
         const pagesInMode = pagesStore.pages.filter((p) => pageKind(p) === mode);
         const activePage = pagesStore.pages.find((p) => p.id === pagesStore.activePageId);
@@ -882,6 +946,9 @@ export async function openNotebook() {
         const viewerPagesStore = activePage && pageKind(activePage) === mode
             ? pagesStore
             : { pages: pagesStore.pages, activePageId: null };
+        const viewerPage = viewerPagesStore.activePageId ? activePage : null;
+        // Страница открывается в том режиме, в котором её оставили.
+        previewMode = viewerPage?.viewMode === 'preview';
 
         root.innerHTML = `
             <h3 class="pw-title">Sketchbook</h3>
@@ -911,6 +978,7 @@ export async function openNotebook() {
                 </div>
             </div>
         `;
+        restoreScroll(viewerPage);
     };
     render();
 
@@ -992,7 +1060,11 @@ export async function openNotebook() {
 
     // Просмотр ⇄ Редактирование.
     $(root).on('click', '.pw-page-preview-toggle', () => {
-        previewMode = !previewMode;
+        flushScroll();
+        const pagesStore = getPagesStore();
+        if (pagesStore.activePageId) {
+            updatePage(pagesStore.activePageId, { viewMode: previewMode ? 'edit' : 'preview' });
+        }
         render();
     });
 
@@ -1083,4 +1155,5 @@ export async function openNotebook() {
     });
 
     await popup.show();
+    flushScroll();
 }

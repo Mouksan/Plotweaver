@@ -4,9 +4,11 @@
  * чтобы расширение выглядело "родным" в любой теме оформления.
  */
 
-/* --- Панель настроек расширений: три кнопки-модуля --- */
+/* --- Панель настроек расширений: три кнопки-модуля ---
+   Flex — на обёртке кнопок, а не на .inline-drawer-content: иначе наш display
+   перебивает таверну, и ящик не сворачивается. */
 
-.plotweaver-settings .inline-drawer-content {
+.plotweaver-settings .pw-panel-btns {
     display: flex;
     flex-direction: column;
     gap: 6px;
