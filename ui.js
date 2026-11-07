@@ -18,6 +18,7 @@ import { getDraft, saveDraftDebounced, getPagesStore, addPage, updatePage, delet
 import { runGeneration, computeResponseLength, stopMainApiGeneration } from './generate.js';
 import { renderMarkdown } from './markdown.js';
 import { openAlter } from './alter.js';
+import { selected_world_info, world_info, METADATA_KEY } from '../../../world-info.js';
 
 /** Короткий алиас, чтобы не писать SillyTavern.getContext() в каждой строке. */
 function ctx() {
@@ -226,16 +227,88 @@ export function getDefaultCharacterLoreName() {
     }
 }
 
+// --- Активные лорбуки чата (порт из Junket) ---
+
+const ACTIVE_KIND_LABELS = {
+    chat: 'чат',
+    character: 'персонаж',
+    persona: 'персона',
+    global: 'глобальный',
+};
+
+function characterFileName(character) {
+    return String(character?.avatar || '').replace(/\.[^/.]+$/, '');
+}
+
+/** Персонажи текущего чата (в групповом — все участники). */
+function chatCharacters() {
+    const c = ctx();
+    const characters = [];
+    if (c.groupId) {
+        const group = c.groups?.find((g) => g.id === c.groupId);
+        for (const avatar of group?.members || []) {
+            const member = c.characters?.find((ch) => ch.avatar === avatar);
+            if (member) characters.push(member);
+        }
+    } else if (c.characterId !== undefined && c.characterId !== null) {
+        const character = c.characters?.[c.characterId];
+        if (character) characters.push(character);
+    }
+    return characters;
+}
+
+/**
+ * Лорбуки, которые таверна сейчас подключает к этому чату.
+ * Map: имя → вид ('chat' | 'character' | 'persona' | 'global'),
+ * в порядке: чат, персонаж, персона, глобальные.
+ */
+function getActiveLorebooks() {
+    const c = ctx();
+    const result = new Map();
+    const add = (name, kind) => {
+        if (name && !result.has(name)) result.set(name, kind);
+    };
+    try {
+        add(c.chatMetadata?.[METADATA_KEY], 'chat');
+        for (const character of chatCharacters()) {
+            add(character?.data?.extensions?.world, 'character');
+            const extra = world_info?.charLore?.find((e) => e.name === characterFileName(character));
+            for (const name of extra?.extraBooks || []) add(name, 'character');
+        }
+        add(c.powerUserSettings?.persona_description_lorebook, 'persona');
+        for (const name of selected_world_info || []) add(name, 'global');
+    } catch (error) {
+        console.warn('[Plotweaver] не удалось определить активные лорбуки', error);
+    }
+    return result;
+}
+
+/** Сначала активные (в их порядке), потом остальные по алфавиту. */
+function getSortedLoreList() {
+    const all = getLoreNames();
+    const existing = new Set(all);
+    const active = getActiveLorebooks();
+    const activeItems = [...active.entries()]
+        .filter(([name]) => existing.has(name)) // удалённый лорбук, а ссылка осталась
+        .map(([name, kind]) => ({ name, activeKind: kind }));
+    const rest = all
+        .filter((name) => !active.has(name))
+        .sort((a, b) => a.localeCompare(b, 'ru'))
+        .map((name) => ({ name, activeKind: null }));
+    return [...activeItems, ...rest];
+}
+
 export function loreSelectHtml(selectedNames) {
-    const names = getLoreNames();
-    if (!names.length) {
+    const list = getSortedLoreList();
+    if (!list.length) {
         return '<div class="pw-hint">Лорбуков в системе не найдено.</div>';
     }
-    const itemsHtml = names
-        .map((name) => `
-            <label class="pw-lore-item">
+    const itemsHtml = list
+        .map(({ name, activeKind }) => `
+            <label class="pw-lore-item ${activeKind ? 'pw-lore-item--active' : ''}">
                 <input type="checkbox" class="pw-lore-checkbox" value="${escapeHtml(name)}" ${selectedNames.includes(name) ? 'checked' : ''}>
-                <span>${escapeHtml(name)}</span>
+                <span class="pw-lore-name">${escapeHtml(name)}</span>
+                ${activeKind ? `<span class="pw-lore-badge">${ACTIVE_KIND_LABELS[activeKind]}</span>` : ''}
             </label>
         `)
         .join('');
@@ -549,7 +622,7 @@ export async function openQuestionnaire() {
     $(root).on('input', '.pw-lore-search', function () {
         const query = String($(this).val() || '').trim().toLowerCase();
         $(root).find('.pw-lore-item').each(function () {
-            const text = $(this).text().trim().toLowerCase();
+            const text = $(this).find('.pw-lore-name').text().trim().toLowerCase();
             $(this).toggle(!query || text.includes(query));
         });
     });

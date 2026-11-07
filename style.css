@@ -353,6 +353,26 @@
     background-color: var(--SmartThemeBotMesBlurTintColor);
 }
 
+.pw-lore-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* Активные лорбуки чата — сверху, жирным и с бейджем, как в Junket. */
+.pw-lore-item--active .pw-lore-name {
+    font-weight: 600;
+}
+
+.pw-lore-badge {
+    flex-shrink: 0;
+    padding: 0 6px;
+    font-size: 0.8em;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    opacity: 0.7;
+}
+
 /* --- Общий футер с кнопками действия --- */
 
 .pw-footer {

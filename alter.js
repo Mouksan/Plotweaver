@@ -316,6 +316,15 @@ export async function openAlter() {
         persistAlterDraft();
     });
 
+    // Поиск по списку лорбуков — прячет несовпавшие строки, галки не трогает.
+    $(root).on('input', '.pw-lore-search', function () {
+        const query = String($(this).val() || '').trim().toLowerCase();
+        $(root).find('.pw-lore-item').each(function () {
+            const text = $(this).find('.pw-lore-name').text().trim().toLowerCase();
+            $(this).toggle(!query || text.includes(query));
+        });
+    });
+
     // Любое изменение текстовых полей/модели/лорбуков/тумблера имён — тоже сохраняем.
     $(root).on('input change', '.pw-alter-species, .pw-alter-connection, .pw-alter-notes, .pw-model-select, .pw-lore-checkbox, .pw-alter-avoid-names', persistAlterDraft);
 
