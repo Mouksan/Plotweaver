@@ -59,6 +59,9 @@ export function stripRoleplayArtifacts(text) {
     return String(text || '')
         .replace(/<horae>[\s\S]*?<\/horae>/gi, '')
         .replace(/<horaeevent>[\s\S]*?<\/horaeevent>/gi, '')
+        // скрытые HTML-комментарии (<!-- HT … --> от Hearthtide и т. п.); последнее — незакрытый в самом конце
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/<!--[\s\S]*$/, '')
         .replace(/^\s*\{[^\n{}]*\}\s*$/gm, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
