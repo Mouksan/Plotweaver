@@ -7,7 +7,7 @@
 
 import { buildContext } from './prompt.js';
 import { runGeneration, stopMainApiGeneration } from './generate.js';
-import { addPage, getAlterDraft, saveAlterDraftDebounced } from './settings.js';
+import { addPage, getAlterDraft, saveAlterDraftDebounced, getAlterLast, saveAlterLast } from './settings.js';
 import { modelSectionHtml, loreSelectHtml, getDefaultCharacterLoreName } from './ui.js';
 
 function ctx() {
@@ -72,11 +72,103 @@ const INVENTION_TEXT = {
     free: 'The card/lorebook are binding wherever they establish something, but where material is missing, invent generously and boldly.',
 };
 
+// ---------------------------------------------------------------------------
+// Анти-слоп
+// ---------------------------------------------------------------------------
+
+const BACKGROUND_COUNT = 3;
+
+// Случайные затравки: каждый бэкграунд строится вокруг своей пары
+// «образ жизни × темперамент». Без них модель на одинаковый запрос выдаёт
+// одного и того же персонажа (и попадает в кэш).
+const LIFESTYLE_SEEDS = [
+    'heir to old money, used to being spoiled',
+    'student juggling studies and a part-time job',
+    'owner of a small family business',
+    'artist or performer still trying to make it',
+    'professional athlete or competitive fighter',
+    'respectable white-collar professional (law, medicine, finance)',
+    'caregiver by trade (nurse, teacher, nanny, social worker)',
+    'skilled tradesman or craftsman',
+    'small-time hustler living off schemes',
+    'academic or researcher obsessed with one subject',
+    'minor celebrity or public figure',
+    'service worker who genuinely loves the job (florist, baker, hairdresser, barista)',
+    'soldier, guard or ex-military',
+    'drifter with no fixed home',
+    'clergy or someone raised deep inside a faith',
+    'mid-level bureaucrat in a rigid institution',
+    'middle child of a huge, loud family business',
+    'runaway from a sheltered, overprotective upbringing',
+    'engineer or tinkerer who lives in their workshop',
+    'rural worker who finds the city exhausting',
+    'chef or cook running a busy kitchen',
+    'retired early, bored and looking for trouble',
+];
+
+const TEMPERAMENT_SEEDS = [
+    'sunny and openly affectionate',
+    'shy and soft-spoken',
+    'loud, bratty and dramatic',
+    'calm and nurturing',
+    'cocky and flirtatious',
+    'prim, proper and uptight',
+    'chaotic and goofy',
+    'quietly intense and stubborn',
+    'sharp-tongued but kind',
+    'earnest and a little naive',
+    'cool, composed and aloof',
+];
+
+// Фамилии, которые модель затёрла до дыр (видны в генах подряд).
+const OVERUSED_SURNAMES = [
+    'Vance', 'Thorne', 'Mercer', 'Sterling', 'Cross', 'Blackwood', 'Hale',
+    'Lindqvist', 'Gallagher', 'Novak', 'Solberg', 'Castellano', 'Brooks', 'Reyes',
+];
+
+/** n разных случайных элементов массива. */
+function pickDistinct(list, n) {
+    const pool = [...list];
+    const out = [];
+    while (out.length < n && pool.length) {
+        out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    }
+    return out;
+}
+
+/** Три пары «образ жизни × темперамент» на один ген. */
+export function pickAlterSeeds() {
+    const lifestyles = pickDistinct(LIFESTYLE_SEEDS, BACKGROUND_COUNT);
+    const temperaments = pickDistinct(TEMPERAMENT_SEEDS, BACKGROUND_COUNT);
+    return lifestyles.map((lifestyle, i) => ({ lifestyle, temperament: temperaments[i] }));
+}
+
+
+/** Имена и строки TYPE из ответа — чтобы следующий ген их не повторял. */
+export function parseAlterResult(text) {
+    const names = [];
+    const types = [];
+    let section = '';
+    for (const rawLine of String(text || '').split('\n')) {
+        const line = rawLine.replace(/\*\*/g, '').trim();
+        const heading = line.match(/^#{1,3}\s*([A-Z]+)/);
+        if (heading) { section = heading[1].toUpperCase(); continue; }
+        if (section === 'NAMES') {
+            const m = line.match(/^\d+[.)]\s*(.+)$/);
+            if (m) names.push(m[1].trim());
+        } else if (section === 'BACKGROUND') {
+            const m = line.match(/^(?:\d+[.)]\s*)?TYPE:\s*(.+)$/i);
+            if (m) types.push(m[1].trim());
+        }
+    }
+    return { names: names.slice(0, 20), types: types.slice(0, 10) };
+}
+
 /**
  * Собирает промт для Alter.
- * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames }
+ * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds, lastGen }
  */
-function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames }) {
+function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds = [], lastGen = null }) {
     const parts = [];
 
     parts.push(
@@ -89,21 +181,29 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         + 'summarize, or borrow from the bot\'s own backstory.\n\n'
         + 'This is not a finished character sheet, not prose, not a finished bio. The author '
         + 'will mix and match pieces afterward (a name from one option, a personality block '
-        + 'from another) — so give independent, varied options, not five complete matching characters.',
+        + 'from another) — so give independent, varied options, not matching characters.',
     );
     parts.push('Write everything in English.');
     parts.push(
         'THIS IS A STARTING POINT, NOT A CHARACTER BIBLE.\n'
         + 'No atmospheric description, no backstory paragraphs, no flowery language. '
-        + 'Personality is single-word traits only. Background is short, concrete bullet '
-        + 'points — not a memoir. If a sentence could be cut without losing information, cut it.',
+        + 'Personality is single-word traits only. Background is concrete bullet points — '
+        + 'each one a specific, vivid fact, not a memoir.',
     );
 
     if (contextText) parts.push(contextText);
 
+    parts.push(
+        '# THE OPENING SCENE IS ONE MOMENT (MANDATORY)\n'
+        + 'The card and first message show one moment of the bot\'s story. Do not build the '
+        + 'persona\'s whole life around that moment: if the scene happens at night, in a '
+        + 'hospital, after a crime or at a death, that says nothing about the persona\'s job, '
+        + 'schedule, habits or temperament. The persona had a full, ordinary-for-them life before it.',
+    );
+
     const briefLines = [];
     if (gender) briefLines.push(`- Gender/pronouns: ${gender}`);
-    if (species) briefLines.push(`- Race/species (take this into account for background and, if relevant, scent): ${species}`);
+    if (species) briefLines.push(`- Race/species (take this into account for background${pheromoneLabels.length ? ' and scent' : ''}; do not describe how it looks): ${species}`);
     if (connection) briefLines.push(`- Connection to this bot/story — reflect this in the single relationship bullet allowed per background variation: ${connection}`);
     if (briefLines.length) {
         parts.push(`# AUTHOR'S BRIEF (MANDATORY)\n${briefLines.join('\n')}`);
@@ -123,6 +223,53 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
 
     parts.push(`# HOW MUCH TO INVENT\n${INVENTION_TEXT[invention] || INVENTION_TEXT.balanced}`);
 
+    parts.push(
+        '# BANNED — CLICHÉS (MANDATORY)\n'
+        + 'These are overused and specifically unwanted. Never use them anywhere, in any variation:\n'
+        + '- phobias and fears as a quirk (deep water, heights, enclosed spaces, crowds, the dark…);\n'
+        + '- insomnia, being nocturnal, night shifts or a graveyard schedule as a default;\n'
+        + '- collecting vinyl records, cassettes, film cameras, vintage cars or any other "retro" collection;\n'
+        + '- illnesses, allergies, injuries, scars, partial deafness/blindness or chronic pain as a quirk;\n'
+        + '- stock props: black coffee by the pot, smoking "to cope", feeding stray animals, '
+        + 'compulsive tidying, checking locks twice;\n'
+        + '- APPEARANCE of any kind: height, build, face, hair, eyes, glasses, skin, scars, tattoos, '
+        + 'a crooked nose, clothing style. This tool is not about looks;\n'
+        + `- SCENT or smell of any kind${pheromoneLabels.length ? ', except inside the SCENT section' : ''};\n`
+        + '- states instead of personality traits (insomnia-prone, nocturnal, sleep-deprived).',
+    );
+
+    parts.push(
+        '# RANGE (MANDATORY)\n'
+        + 'Your first idea is the cliché — skip it. The variations must come from DIFFERENT WORLDS: '
+        + 'different social class, adult age bracket, temperament, daily rhythm and way of life. '
+        + 'The same chat can fit anyone from a towering bouncer to a sweet femboy florist, from '
+        + 'an old-money heir to a broke student (these only show the range — do not reuse them). '
+        + 'If two variations could swap a '
+        + 'bullet without anyone noticing, rewrite one of them.',
+    );
+
+    if (seeds.length) {
+        parts.push(
+            '# SEEDS (MANDATORY)\n'
+            + 'Build each background variation around its seed: lifestyle × temperament. '
+            + 'Adapt the seed to the setting (e.g. "heir to old money" becomes a noble scion in a '
+            + 'fantasy world). The author\'s brief and notes above win if they conflict with a seed.\n'
+            + seeds.map((seed, i) => `${i + 1}. ${seed.lifestyle} × ${seed.temperament}`).join('\n'),
+        );
+    }
+
+    const lastNames = lastGen?.names?.length ? lastGen.names : [];
+    const lastTypes = lastGen?.types?.length ? lastGen.types : [];
+    if (lastNames.length || lastTypes.length) {
+        parts.push(
+            '# PREVIOUS GENERATION — DO NOT REPEAT (MANDATORY)\n'
+            + 'The author already saw these. Do not reuse these first names or surnames, and do not '
+            + 'give a background with a similar occupation or type:\n'
+            + (lastNames.length ? `- Names: ${lastNames.join(', ')}\n` : '')
+            + (lastTypes.length ? `- Types: ${lastTypes.join('; ')}` : ''),
+        );
+    }
+
     const scentSection = pheromoneLabels.length
         ? `\n\n## SCENT\n5 variations of scent/pheromone notes, each incorporating: ${pheromoneLabels.join(', ')}. `
             + 'One short phrase per line, numbered 1-5.\n'
@@ -134,25 +281,35 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         '# OUTPUT FORMAT (MANDATORY)\n'
         + 'Give exactly these sections, in this order, and nothing else:\n\n'
         + '## NAMES\n'
-        + '10 full names (first + family name) fitting the setting. One per line, numbered 1-10.'
+        + '10 full names (first + family name) fitting the setting, of varied origins and sounds — '
+        + 'not ten variations of one noir cast. Avoid these worn-out surnames: '
+        + `${OVERUSED_SURNAMES.join(', ')}. One per line, numbered 1-10.`
         + scentSection
         + '\n\n## PERSONALITY\n'
         + '5 variations. Each is 5-6 single-word traits, comma-separated '
-        + '(e.g. "cheerful, clingy, melancholic, blunt, loyal"). One per line, numbered 1-5.\n\n'
+        + '(e.g. "cheerful, clingy, melancholic, blunt, loyal"). One per line, numbered 1-5.\n'
+        + 'Cover opposite poles: at least one warm/sunny, one soft/shy, one loud/bratty or cocky. '
+        + 'Do not default to "cynical, observant, dry-humored, guarded" — at most one variation '
+        + 'may be cool or guarded.\n\n'
         + '## BACKGROUND\n'
-        + '5 variations. Each is 4-5 short bullet points of TRIVIA ABOUT THIS PERSONA '
-        + 'THEMSELVES — concrete facts that make them a specific person: occupation, origin, '
-        + 'skills, habits, quirks, fears, tastes, physical details, small personal history. '
+        + `${BACKGROUND_COUNT} variations. Each starts with a line "N. TYPE: <4-8 word tag>" that sums up `
+        + 'who this person is: temperament + who they are + one twist (do not reuse examples from this prompt), '
+        + 'followed by 8-10 bullet points of TRIVIA ABOUT THIS PERSONA THEMSELVES. Draw from: how '
+        + 'they earn a living and how they feel about it, where and how they live, family and '
+        + 'upbringing, what they are good at, what they do for fun, friends and who they clash '
+        + 'with, a contradiction or small secret, what they want right now, a specific taste or '
+        + 'guilty pleasure. Each bullet is one concrete fact, specific enough to belong to this '
+        + 'person only.\n'
         + 'At most ONE bullet per variation may mention how they know or relate to the bot; '
         + 'the rest must be about the persona alone. Do NOT retell the bot\'s backstory, do '
         + 'NOT summarize the events of the first message, and do NOT describe what the bot '
-        + 'does or wants — those are already known. Concrete and factual, not a memoir. '
-        + 'One numbered block (1-5) per variation.',
+        + 'does or wants — those are already known.',
     );
 
     parts.push(
-        'FINAL REMINDER: starting point, not prose. No atmosphere, no scene-setting, no '
-        + 'sentimental phrasing — plain, mixable options within the limits above.',
+        'FINAL REMINDER: starting point, not prose. No appearance, no scent outside SCENT, '
+        + 'no phobias, no insomnia, no retro collections. Three people from three different '
+        + 'worlds, built on their seeds.',
     );
 
     return parts.join('\n\n');
@@ -376,6 +533,8 @@ export async function openAlter() {
                 connection,
                 invention,
                 avoidNames: $(root).find('.pw-alter-avoid-names').prop('checked') ? getAllPersonaNames() : [],
+                seeds: pickAlterSeeds(),
+                lastGen: getAlterLast(),
             });
 
             const text = await runGeneration({
@@ -384,6 +543,10 @@ export async function openAlter() {
                 responseLength: 4096,
                 signal: abortController.signal,
             });
+
+            // Запоминаем имена и типы: следующий ген в этом чате их не повторит.
+            const parsed = parseAlterResult(text);
+            if (parsed.names.length || parsed.types.length) saveAlterLast(parsed);
 
             if (popupClosed) {
                 addPage({ text, kind: 'persona' });

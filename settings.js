@@ -98,6 +98,31 @@ export function getAlterDraft() {
     return { ...emptyAlterDraft(), ...saved };
 }
 
+// Что выдал прошлый ген Alter в этом чате: имена и строки TYPE. Следующий ген
+// получает их как «не повторяй». Отдельный ключ: черновик формы перезаписывается
+// целиком при каждой правке и стёр бы это.
+const ALTER_LAST_KEY = 'plotweaver_alter_last';
+
+/** Имена и типы прошлого гена Alter в этом чате. */
+export function getAlterLast() {
+    const saved = chatMetadataStore()?.[ALTER_LAST_KEY];
+    return {
+        names: Array.isArray(saved?.names) ? saved.names.filter(x => typeof x === 'string') : [],
+        types: Array.isArray(saved?.types) ? saved.types.filter(x => typeof x === 'string') : [],
+    };
+}
+
+export function saveAlterLast({ names, types }) {
+    const store = chatMetadataStore();
+    if (!store) return;
+    store[ALTER_LAST_KEY] = { names: names || [], types: types || [] };
+    try {
+        ctx().saveMetadata?.();
+    } catch (error) {
+        console.warn('[Plotweaver] не удалось запомнить прошлый ген Alter', error);
+    }
+}
+
 let alterSaveTimer = null;
 
 /** Сохраняет черновик Alter с небольшой задержкой — тот же принцип, что у опросника. */
