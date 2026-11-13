@@ -103,19 +103,17 @@ export function getAlterDraft() {
 // целиком при каждой правке и стёр бы это.
 const ALTER_LAST_KEY = 'plotweaver_alter_last';
 
-/** Имена и типы прошлого гена Alter в этом чате. */
+/** Имена, типы и пункты бэкграундов прошлого гена Alter в этом чате. */
 export function getAlterLast() {
     const saved = chatMetadataStore()?.[ALTER_LAST_KEY];
-    return {
-        names: Array.isArray(saved?.names) ? saved.names.filter(x => typeof x === 'string') : [],
-        types: Array.isArray(saved?.types) ? saved.types.filter(x => typeof x === 'string') : [],
-    };
+    const strings = (list) => (Array.isArray(list) ? list.filter(x => typeof x === 'string') : []);
+    return { names: strings(saved?.names), types: strings(saved?.types), bullets: strings(saved?.bullets) };
 }
 
-export function saveAlterLast({ names, types }) {
+export function saveAlterLast({ names, types, bullets }) {
     const store = chatMetadataStore();
     if (!store) return;
-    store[ALTER_LAST_KEY] = { names: names || [], types: types || [] };
+    store[ALTER_LAST_KEY] = { names: names || [], types: types || [], bullets: bullets || [] };
     try {
         ctx().saveMetadata?.();
     } catch (error) {
@@ -236,4 +234,30 @@ export function setActivePage(pageId) {
     const pagesStore = getPagesStore();
     pagesStore.activePageId = pageId;
     persistPagesStore(pagesStore);
+}
+
+// ---------------------------------------------------------------------------
+// Стоп-лист Alter — общий для всех чатов, живёт в настройках расширений
+// ---------------------------------------------------------------------------
+
+const GLOBAL_KEY = 'plotweaver';
+
+function globalSettings() {
+    const all = ctx().extensionSettings;
+    if (!all) return null;
+    if (!all[GLOBAL_KEY] || typeof all[GLOBAL_KEY] !== 'object') all[GLOBAL_KEY] = {};
+    return all[GLOBAL_KEY];
+}
+
+/** «Не хочу видеть» для Alter: свободный текст, через запятую. */
+export function getAlterStopList() {
+    const value = globalSettings()?.alterStopList;
+    return typeof value === 'string' ? value : '';
+}
+
+export function setAlterStopList(text) {
+    const settings = globalSettings();
+    if (!settings) return;
+    settings.alterStopList = String(text || '');
+    ctx().saveSettingsDebounced?.();
 }

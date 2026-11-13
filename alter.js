@@ -7,7 +7,7 @@
 
 import { buildContext } from './prompt.js';
 import { runGeneration, stopMainApiGeneration } from './generate.js';
-import { addPage, getAlterDraft, saveAlterDraftDebounced, getAlterLast, saveAlterLast } from './settings.js';
+import { addPage, getAlterDraft, saveAlterDraftDebounced, getAlterLast, saveAlterLast, getAlterStopList, setAlterStopList } from './settings.js';
 import { modelSectionHtml, loreSelectHtml, getDefaultCharacterLoreName } from './ui.js';
 
 function ctx() {
@@ -144,10 +144,15 @@ export function pickAlterSeeds() {
 }
 
 
-/** Имена и строки TYPE из ответа — чтобы следующий ген их не повторял. */
+// Сколько слов пункта бэкграунда запоминаем для «не повторяй»: начала хватает,
+// чтобы модель узнала занятие или реквизит, а промпт не раздувается.
+const LAST_BULLET_WORDS = 12;
+
+/** Имена, строки TYPE и начала пунктов из ответа — чтобы следующий ген их не повторял. */
 export function parseAlterResult(text) {
     const names = [];
     const types = [];
+    const bullets = [];
     let section = '';
     for (const rawLine of String(text || '').split('\n')) {
         const line = rawLine.replace(/\*\*/g, '').trim();
@@ -158,17 +163,22 @@ export function parseAlterResult(text) {
             if (m) names.push(m[1].trim());
         } else if (section === 'BACKGROUND') {
             const m = line.match(/^(?:\d+[.)]\s*)?TYPE:\s*(.+)$/i);
-            if (m) types.push(m[1].trim());
+            if (m) { types.push(m[1].trim()); continue; }
+            const b = line.match(/^[-*•]\s*(.+)$/);
+            if (b) {
+                const words = b[1].trim().split(/\s+/);
+                bullets.push(words.slice(0, LAST_BULLET_WORDS).join(' ') + (words.length > LAST_BULLET_WORDS ? '…' : ''));
+            }
         }
     }
-    return { names: names.slice(0, 20), types: types.slice(0, 10) };
+    return { names: names.slice(0, 20), types: types.slice(0, 10), bullets: bullets.slice(0, 36) };
 }
 
 /**
  * Собирает промт для Alter.
- * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds, lastGen }
+ * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds, lastGen, stopList }
  */
-function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds = [], lastGen = null }) {
+function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds = [], lastGen = null, stopList = '' }) {
     const parts = [];
 
     parts.push(
@@ -209,6 +219,15 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         parts.push(`# AUTHOR'S BRIEF (MANDATORY)\n${briefLines.join('\n')}`);
     }
 
+    if (!connection) {
+        parts.push(
+            '# CONNECTION TO THE BOT\n'
+            + 'The author gave no connection. Each variation may have at most one bullet about it, '
+            + 'or none. If you use one, every variation must use a DIFFERENT hook from the card or '
+            + 'lore — never the same organization, place or person twice, and not the most obvious one by default.',
+        );
+    }
+
     if (avoidNames && avoidNames.length) {
         parts.push(
             "# NAMES ALREADY IN USE (MANDATORY)\n"
@@ -226,17 +245,33 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
     parts.push(
         '# BANNED — CLICHÉS (MANDATORY)\n'
         + 'These are overused and specifically unwanted. Never use them anywhere, in any variation:\n'
-        + '- phobias and fears as a quirk (deep water, heights, enclosed spaces, crowds, the dark…);\n'
-        + '- insomnia, being nocturnal, night shifts or a graveyard schedule as a default;\n'
+        + '- phobias and fears (deep water, heights, enclosed spaces, crowds, the dark…) — '
+        + 'not as a quirk and not as backstory;\n'
+        + '- insomnia, being nocturnal, night jobs, night shifts or a graveyard schedule — none at all;\n'
         + '- collecting vinyl records, cassettes, film cameras, vintage cars or any other "retro" collection;\n'
-        + '- illnesses, allergies, injuries, scars, partial deafness/blindness or chronic pain as a quirk;\n'
+        + '- illnesses, allergies, injuries, scars, hearing loss, partial deafness/blindness or chronic '
+        + 'pain — not as a quirk and not as backstory;\n'
         + '- stock props: black coffee by the pot, smoking "to cope", feeding stray animals, '
-        + 'compulsive tidying, checking locks twice;\n'
+        + 'compulsive tidying or neatness, checking locks twice, memorizing transit schedules;\n'
+        + '- stock hobbies: kayaking, gambling of any kind (poker, backgammon, betting);\n'
+        + '- stock family beats: calling mom every Sunday, a big loud family of six or seven, '
+        + 'a strict household — as a default upbringing;\n'
+        + '- stock phrasing: "maintains a polite distance… preferring the company of", '
+        + '"clashes constantly with";\n'
         + '- APPEARANCE of any kind: height, build, face, hair, eyes, glasses, skin, scars, tattoos, '
         + 'a crooked nose, clothing style. This tool is not about looks;\n'
         + `- SCENT or smell of any kind${pheromoneLabels.length ? ', except inside the SCENT section' : ''};\n`
         + '- states instead of personality traits (insomnia-prone, nocturnal, sleep-deprived).',
     );
+
+    const stop = String(stopList || '').trim();
+    if (stop) {
+        parts.push(
+            "# AUTHOR'S STOP-LIST (MANDATORY)\n"
+            + 'The author never wants to see these, in any variation or section, in any form: '
+            + stop,
+        );
+    }
 
     parts.push(
         '# RANGE (MANDATORY)\n'
@@ -260,13 +295,16 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
 
     const lastNames = lastGen?.names?.length ? lastGen.names : [];
     const lastTypes = lastGen?.types?.length ? lastGen.types : [];
-    if (lastNames.length || lastTypes.length) {
+    const lastBullets = lastGen?.bullets?.length ? lastGen.bullets : [];
+    if (lastNames.length || lastTypes.length || lastBullets.length) {
         parts.push(
             '# PREVIOUS GENERATION — DO NOT REPEAT (MANDATORY)\n'
-            + 'The author already saw these. Do not reuse these first names or surnames, and do not '
-            + 'give a background with a similar occupation or type:\n'
+            + 'The author already saw these. Do not reuse these first names or surnames, do not '
+            + 'give a background with a similar occupation or type, and do not reuse the hobbies, '
+            + 'props, tastes, family setups or phrasing from these bullets:\n'
             + (lastNames.length ? `- Names: ${lastNames.join(', ')}\n` : '')
-            + (lastTypes.length ? `- Types: ${lastTypes.join('; ')}` : ''),
+            + (lastTypes.length ? `- Types: ${lastTypes.join('; ')}\n` : '')
+            + (lastBullets.length ? `- Bullets:\n${lastBullets.map(b => `  - ${b}`).join('\n')}` : ''),
         );
     }
 
@@ -300,6 +338,11 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         + 'with, a contradiction or small secret, what they want right now, a specific taste or '
         + 'guilty pleasure. Each bullet is one concrete fact, specific enough to belong to this '
         + 'person only.\n'
+        + 'These topics are a MENU, not a checklist: skip some, give two bullets to others, and '
+        + 'put them in a different order in every variation — no shared skeleton, and no variation '
+        + 'ends on "wants…". Vary how bullets open: do not start them with "Spends his…", '
+        + '"Secretly…", "Currently…" or "Wants…". A food or drink guilty pleasure may appear in '
+        + 'at most one variation.\n'
         + 'At most ONE bullet per variation may mention how they know or relate to the bot; '
         + 'the rest must be about the persona alone. Do NOT retell the bot\'s backstory, do '
         + 'NOT summarize the events of the first message, and do NOT describe what the bot '
@@ -418,6 +461,12 @@ export async function openAlter() {
         </div>
 
         <div class="pw-question">
+            <div class="pw-question-label">Не хочу видеть</div>
+            <div class="pw-question-hint">Через запятую. Общий для всех чатов, уходит модели как запрет.</div>
+            <textarea class="text_pole pw-alter-stoplist" rows="2" placeholder="Например: каяк, покер, кошки...">${escapeHtml(getAlterStopList())}</textarea>
+        </div>
+
+        <div class="pw-question">
             <div class="pw-question-label">Сколько выдумывать</div>
             <div class="pw-segmented">${segmentedRowHtml('invention', INVENTION_OPTIONS, draft.invention)}</div>
         </div>
@@ -483,6 +532,11 @@ export async function openAlter() {
     });
 
     // Любое изменение текстовых полей/модели/лорбуков/тумблера имён — тоже сохраняем.
+    // Стоп-лист — общий для всех чатов, поэтому мимо черновика чата.
+    $(root).on('input', '.pw-alter-stoplist', function () {
+        setAlterStopList($(this).val());
+    });
+
     $(root).on('input change', '.pw-alter-species, .pw-alter-connection, .pw-alter-notes, .pw-model-select, .pw-lore-checkbox, .pw-alter-avoid-names', persistAlterDraft);
 
     let activeAbort = null;
@@ -535,6 +589,7 @@ export async function openAlter() {
                 avoidNames: $(root).find('.pw-alter-avoid-names').prop('checked') ? getAllPersonaNames() : [],
                 seeds: pickAlterSeeds(),
                 lastGen: getAlterLast(),
+                stopList: getAlterStopList(),
             });
 
             const text = await runGeneration({
@@ -546,7 +601,7 @@ export async function openAlter() {
 
             // Запоминаем имена и типы: следующий ген в этом чате их не повторит.
             const parsed = parseAlterResult(text);
-            if (parsed.names.length || parsed.types.length) saveAlterLast(parsed);
+            if (parsed.names.length || parsed.types.length || parsed.bullets.length) saveAlterLast(parsed);
 
             if (popupClosed) {
                 addPage({ text, kind: 'persona' });
