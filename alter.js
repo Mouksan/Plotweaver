@@ -39,6 +39,11 @@ const GENDER_OPTIONS = [
     { id: 'any', label: 'Любой' },
 ];
 
+const ROLE_CANON_OPTIONS = [
+    { id: 'yes', label: 'Да' },
+    { id: 'no', label: 'Нет' },
+];
+
 const INVENTION_OPTIONS = [
     { id: 'canon', label: 'Строго канон' },
     { id: 'balanced', label: 'Средне' },
@@ -176,9 +181,9 @@ export function parseAlterResult(text) {
 
 /**
  * Собирает промт для Alter.
- * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds, lastGen, stopList }
+ * params: { contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds, lastGen, stopList, roleCanon }
  */
-function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds = [], lastGen = null, stopList = '' }) {
+function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes, connection, invention, avoidNames, seeds = [], lastGen = null, stopList = '', roleCanon = true }) {
     const parts = [];
 
     parts.push(
@@ -203,18 +208,33 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
 
     if (contextText) parts.push(contextText);
 
-    parts.push(
-        '# THE OPENING SCENE IS ONE MOMENT (MANDATORY)\n'
-        + 'The card and first message show one moment of the bot\'s story. Do not build the '
-        + 'persona\'s whole life around that moment: if the scene happens at night, in a '
-        + 'hospital, after a crime or at a death, that says nothing about the persona\'s job, '
-        + 'schedule, habits or temperament. The persona had a full, ordinary-for-them life before it.',
-    );
+    if (roleCanon) {
+        // Автор сказал: роль юзера задана в карточке — она канон для всех вариантов.
+        parts.push(
+            "# {{user}}'S ROLE IS CANON (MANDATORY)\n"
+            + 'The card and first message already define who {{user}} is in this story. Find '
+            + 'everything they state about {{user}} — position, job, status, situation, disguise, '
+            + 'circumstances — and keep ALL of it in EVERY variation. Do not give {{user}} a different '
+            + 'job, rank or situation, and do not upgrade or "improve" the role: if {{user}} is a '
+            + 'lowly servant, every variation is that lowly servant, and that is enough.\n'
+            + 'Vary only what the card leaves open: temperament, how they carry the role and feel '
+            + 'about it, habits, small skills, tastes, friendships and grudges, a secret, a want, '
+            + 'a little of where they came from.',
+        );
+    } else {
+        parts.push(
+            '# THE OPENING SCENE IS ONE MOMENT (MANDATORY)\n'
+            + 'The card and first message show one moment of the bot\'s story. Do not build the '
+            + 'persona\'s whole life around that moment: if the scene happens at night, in a '
+            + 'hospital, after a crime or at a death, that says nothing about the persona\'s job, '
+            + 'schedule, habits or temperament. The persona had a full, ordinary-for-them life before it.',
+        );
+    }
 
     const briefLines = [];
     if (gender) briefLines.push(`- Gender/pronouns: ${gender}`);
     if (species) briefLines.push(`- Race/species (take this into account for background${pheromoneLabels.length ? ' and scent' : ''}; do not describe how it looks): ${species}`);
-    if (connection) briefLines.push(`- Connection to this bot/story — reflect this in the single relationship bullet allowed per background variation: ${connection}`);
+    if (connection) briefLines.push(`- Role and connection to this bot/story — canon for every background variation, shape all bullets around it, not just one: ${connection}`);
     if (briefLines.length) {
         parts.push(`# AUTHOR'S BRIEF (MANDATORY)\n${briefLines.join('\n')}`);
     }
@@ -273,7 +293,15 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         );
     }
 
-    parts.push(
+    if (roleCanon) {
+        parts.push(
+            '# RANGE (MANDATORY)\n'
+            + 'Your first idea is the cliché — skip it. Three DIFFERENT PEOPLE in the SAME role: '
+            + 'different temperament, manner, habits, tastes and inner life, so that the same job '
+            + 'feels like three different characters. If two variations could swap a bullet '
+            + 'without anyone noticing, rewrite one of them.',
+        );
+    } else parts.push(
         '# RANGE (MANDATORY)\n'
         + 'Your first idea is the cliché — skip it. The variations must come from DIFFERENT WORLDS: '
         + 'different social class, adult age bracket, temperament, daily rhythm and way of life. '
@@ -283,7 +311,17 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         + 'bullet without anyone noticing, rewrite one of them.',
     );
 
-    if (seeds.length) {
+    if (seeds.length && roleCanon) {
+        parts.push(
+            '# SEEDS (MANDATORY)\n'
+            + 'Each background variation gets a seed: past × temperament. The TEMPERAMENT shapes '
+            + 'the whole variation. The PAST is only a hint for at most ONE bullet about where '
+            + 'they came from before this role (e.g. "heir to old money" → a ruined heir who ended '
+            + 'up in this role); it never changes the role itself. The author\'s brief and notes '
+            + 'above win if they conflict with a seed.\n'
+            + seeds.map((seed, i) => `${i + 1}. past: ${seed.lifestyle} × ${seed.temperament}`).join('\n'),
+        );
+    } else if (seeds.length) {
         parts.push(
             '# SEEDS (MANDATORY)\n'
             + 'Build each background variation around its seed: lifestyle × temperament. '
@@ -300,7 +338,8 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         parts.push(
             '# PREVIOUS GENERATION — DO NOT REPEAT (MANDATORY)\n'
             + 'The author already saw these. Do not reuse these first names or surnames, do not '
-            + 'give a background with a similar occupation or type, and do not reuse the hobbies, '
+            + (roleCanon ? 'give a background with a similar temperament or type (the role itself stays), ' : 'give a background with a similar occupation or type, ')
+            + 'and do not reuse the hobbies, '
             + 'props, tastes, family setups or phrasing from these bullets:\n'
             + (lastNames.length ? `- Names: ${lastNames.join(', ')}\n` : '')
             + (lastTypes.length ? `- Types: ${lastTypes.join('; ')}\n` : '')
@@ -331,9 +370,12 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
         + 'may be cool or guarded.\n\n'
         + '## BACKGROUND\n'
         + `${BACKGROUND_COUNT} variations. Each starts with a line "N. TYPE: <4-8 word tag>" that sums up `
-        + 'who this person is: temperament + who they are + one twist (do not reuse examples from this prompt), '
-        + 'followed by 8-10 bullet points of TRIVIA ABOUT THIS PERSONA THEMSELVES. Draw from: how '
-        + 'they earn a living and how they feel about it, where and how they live, family and '
+        + (roleCanon
+            ? 'who this person is: temperament + their canon role + one twist (do not reuse examples from this prompt), '
+            : 'who this person is: temperament + who they are + one twist (do not reuse examples from this prompt), ')
+        + 'followed by 8-10 bullet points of TRIVIA ABOUT THIS PERSONA THEMSELVES. Draw from: '
+        + (roleCanon ? 'how they carry their role and feel about it' : 'how they earn a living and how they feel about it')
+        + ', where and how they live, family and '
         + 'upbringing, what they are good at, what they do for fun, friends and who they clash '
         + 'with, a contradiction or small secret, what they want right now, a specific taste or '
         + 'guilty pleasure. Each bullet is one concrete fact, specific enough to belong to this '
@@ -451,7 +493,7 @@ export async function openAlter() {
 
         <div class="pw-question">
             <div class="pw-question-label">Связь с ботом/сюжетом</div>
-            <div class="pw-question-hint">Уйдёт в бэкграунд, отдельным блоком в выводе не станет.</div>
+            <div class="pw-question-hint">Канон для всех вариантов бэкграунда, а не один пункт. Отдельным блоком в выводе не станет.</div>
             <textarea class="text_pole pw-alter-connection" rows="2" placeholder="Например: детство вместе, случайная встреча, похищен...">${escapeHtml(draft.connection)}</textarea>
         </div>
 
@@ -464,6 +506,12 @@ export async function openAlter() {
             <div class="pw-question-label">Не хочу видеть</div>
             <div class="pw-question-hint">Через запятую. Общий для всех чатов, уходит модели как запрет.</div>
             <textarea class="text_pole pw-alter-stoplist" rows="2" placeholder="Например: каяк, покер, кошки...">${escapeHtml(getAlterStopList())}</textarea>
+        </div>
+
+        <div class="pw-question">
+            <div class="pw-question-label">Роль юзера задана в карточке?</div>
+            <div class="pw-question-hint">Да — роль берётся из карточки и первого сообщения, меняются характер и детали. Нет — персона выдумывается с нуля.</div>
+            <div class="pw-segmented">${segmentedRowHtml('roleCanon', ROLE_CANON_OPTIONS, draft.roleCanon)}</div>
         </div>
 
         <div class="pw-question">
@@ -502,6 +550,7 @@ export async function openAlter() {
             connection: $(root).find('.pw-alter-connection').val(),
             notes: $(root).find('.pw-alter-notes').val(),
             invention: $(root).find('.pw-alter-seg[data-name="invention"][aria-pressed="true"]').data('value') || 'balanced',
+            roleCanon: $(root).find('.pw-alter-seg[data-name="roleCanon"][aria-pressed="true"]').data('value') || 'yes',
             profileId: $(root).find('.pw-model-select').val() || '',
             loreNames: $(root).find('.pw-lore-checkbox:checked').map(function () { return $(this).val(); }).get(),
             avoidNames: $(root).find('.pw-alter-avoid-names').prop('checked'),
@@ -546,6 +595,7 @@ export async function openAlter() {
     $(root).on('click', '.pw-alter-generate-btn', async () => {
         const gender = $(root).find('.pw-alter-seg[data-name="gender"][aria-pressed="true"]').data('value') || 'male';
         const invention = $(root).find('.pw-alter-seg[data-name="invention"][aria-pressed="true"]').data('value') || 'balanced';
+        const roleCanon = ($(root).find('.pw-alter-seg[data-name="roleCanon"][aria-pressed="true"]').data('value') || 'yes') === 'yes';
         const species = $(root).find('.pw-alter-species').val().trim();
         const connection = $(root).find('.pw-alter-connection').val().trim();
         const notes = $(root).find('.pw-alter-notes').val().trim();
@@ -590,6 +640,7 @@ export async function openAlter() {
                 seeds: pickAlterSeeds(),
                 lastGen: getAlterLast(),
                 stopList: getAlterStopList(),
+                roleCanon,
             });
 
             const text = await runGeneration({

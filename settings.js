@@ -84,6 +84,8 @@ function emptyAlterDraft() {
         connection: '',
         notes: '',
         invention: 'balanced',
+        // Роль юзера задана в карточке: 'yes' — канон, меняются характер и детали; 'no' — выдумывать.
+        roleCanon: 'yes',
         profileId: '',
         loreNames: [],
         avoidNames: true,
