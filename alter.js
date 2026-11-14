@@ -214,7 +214,9 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
             "# {{user}}'S ROLE IS CANON (MANDATORY)\n"
             + 'The card and first message already define who {{user}} is in this story. Find '
             + 'everything they state about {{user}} — position, job, status, situation, disguise, '
-            + 'circumstances — and keep ALL of it in EVERY variation. Do not give {{user}} a different '
+            + 'circumstances — and keep ALL of it in EVERY variation. Specific duties named in the '
+            + 'card are canon too: if {{user}} scrubs ink from the scholars\' desks, every variation '
+            + 'does exactly that — no other department, no other job. Do not give {{user}} a different '
             + 'job, rank or situation, and do not upgrade or "improve" the role: if {{user}} is a '
             + 'lowly servant, every variation is that lowly servant, and that is enough.\n'
             + 'Vary only what the card leaves open: temperament, how they carry the role and feel '
@@ -230,6 +232,13 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
             + 'schedule, habits or temperament. The persona had a full, ordinary-for-them life before it.',
         );
     }
+
+    parts.push(
+        "# THE BOT'S SECRETS (MANDATORY)\n"
+        + 'The persona does not know the bot\'s secrets — a disguise, a hidden identity, hidden '
+        + 'plans or anything else the card hides from {{user}} — unless the card says plainly that '
+        + '{{user}} knows. No bullet may suspect, notice or hint at them.',
+    );
 
     const briefLines = [];
     if (gender) briefLines.push(`- Gender/pronouns: ${gender}`);
@@ -312,14 +321,13 @@ function buildAlterPrompt({ contextText, gender, species, pheromoneLabels, notes
     );
 
     if (seeds.length && roleCanon) {
+        // При каноне — только темперамент: затравка прошлого перетягивала на себя
+        // строку TYPE и полвариатна.
         parts.push(
             '# SEEDS (MANDATORY)\n'
-            + 'Each background variation gets a seed: past × temperament. The TEMPERAMENT shapes '
-            + 'the whole variation. The PAST is only a hint for at most ONE bullet about where '
-            + 'they came from before this role (e.g. "heir to old money" → a ruined heir who ended '
-            + 'up in this role); it never changes the role itself. The author\'s brief and notes '
-            + 'above win if they conflict with a seed.\n'
-            + seeds.map((seed, i) => `${i + 1}. past: ${seed.lifestyle} × ${seed.temperament}`).join('\n'),
+            + 'Each background variation gets a temperament seed; build the whole variation around '
+            + 'it. The author\'s brief and notes above win if they conflict with a seed.\n'
+            + seeds.map((seed, i) => `${i + 1}. ${seed.temperament}`).join('\n'),
         );
     } else if (seeds.length) {
         parts.push(
